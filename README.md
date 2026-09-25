@@ -18,6 +18,10 @@ python -m meta_labeling --csv SASA.csv --threshold 0.55   # gerçek veri (Date,O
 python -m pytest                                          # testler
 ```
 
+**Jupyter Lab:** `notebooks/meta_labeling_pipeline.ipynb` (adım adım hücreler + equity grafiği)
+veya tek hücreye yapıştırmak için `notebooks/meta_labeling_tek_hucre.py`. İkisi de kendi kendine
+yeter (paket import'u gerektirmez) ve `python scripts/build_notebook.py` ile paketten üretilir.
+
 ```python
 from meta_labeling import MetaLabelingPipeline, PipelineConfig
 
