@@ -3,6 +3,7 @@ AI-assisted quantitative trading and institutional flow analysis system for BIST
 
 - `analysis.py`: SASA/BIST günlük sistem (kurum akışı, z-skor, rejim; tek hücre).
 - `meta_labeling/`: Meta-Labeling + Triple Barrier Method ile uçtan uca, aşırı öğrenmeye dirençli ML pipeline'ı (aşağıda).
+- `meta_labeling/research/`: backtest sonucunun güvenilirliğini test eden araştırma çerçevesi (`config.yaml`, aşağıda).
 
 ## Meta-Labeling Pipeline (`meta_labeling/`)
 
@@ -69,3 +70,33 @@ Tek bir fiyat yolu tek bir gerçekleşmedir: 10 farklı simülasyon tohumunda fi
 10'un 9'unda artırmış (ort. %48.7 → %52.9), portföy Sharpe'ını 9'unda iyileştirmiştir
 (ort. −0.29 → +0.16). Sentetik verideki iyileşme gerçek piyasada garanti değildir; gerçek
 veride aynı pipeline'ı çalıştırıp sonuçları PSR/Deflated Sharpe ile değerlendirin.
+
+## Research Framework (`meta_labeling/research/`)
+
+Amaç backtest performansını maksimize etmek değil, **sonucun güvenilir olup olmadığını test etmek**.
+Tüm parametreler `config.yaml` içindedir; bilinmeyen anahtarlar hata verir.
+
+```bash
+python -m meta_labeling.research --config config.yaml             # tam rapor (~30 sn)
+python -m meta_labeling.research --config config.yaml --universe  # config'deki tüm hisseler
+```
+
+Jupyter: `notebooks/research_framework.ipynb` (01_config … 24_final_report). Çıktılar
+`research_output/<TICKER>/` altına yazılır: `research_report.md` (25 bölüm), `final_oos_results.csv`,
+`robustness_summary.csv`, grafikler ve `research_output/experiments/` deney kayıtları.
+
+| Modül | İçerik |
+|---|---|
+| `leakage.py` | `run_leakage_audit()`: öznitelik/vol/sinyal/CUSUM/ADV/rejim kesme testi, etiket sırası, CV/CPCV bölmeleri, kalibrasyon; PASS/FAIL + feature + timestamp + neden |
+| `execution.py` | Sinyal close(t) → işlem open(t+1) (varsayılan) veya close; `komisyon + spread/2 + slippage + k·sqrt(emir/ADV)`; risk limitleri |
+| `modeling.py` | Execution fiyatlı meta-etiketler, purged walk-forward, geçmişe dayalı Platt/Isotonic kalibrasyon, sizing (equal, vol, Prado, prob×vol, fraksiyonel Kelly) |
+| `session.py` | Aşama aşama `ResearchSession` (benchmark A-I, maliyet, eşik ızgarası, long/short, rejim, dönem, önem + ablation, bootstrap, CPCV, placebo) |
+| `metrics.py` | CAGR, Sharpe, Sortino, Calmar, PF, turnover, exposure, PSR, DSR, drawdown dönemleri, blok bootstrap |
+| `cpcv.py` | Combinatorial Purged CV ve backtest yolu birleştirme |
+| `regimes.py` | Genişleyen kantillerle geleceğe bakmayan vol / trend / piyasa rejimleri |
+| `universe.py` | Çoklu hisse (simulated / csv / yfinance), veri doğrulama, tarihsel endeks üyeliği (survivorship) |
+| `tracking.py`, `report.py` | Deney kaydı + `reproduce()`, otomatik rapor ve ex-ante robustness kriterleri |
+
+Robustness kriterleri (`config.yaml → criteria`) sonuçlara bakmadan tanımlıdır. Placebo testlerinde
+en küçük p-değeri 1/(1+tekrar) olduğundan, tekrar sayısı α'ya ulaşmaya yetmiyorsa test FAIL değil
+**INCONCLUSIVE** olarak raporlanır.

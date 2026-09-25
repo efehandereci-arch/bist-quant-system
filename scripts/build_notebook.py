@@ -4,6 +4,8 @@
 
 * ``notebooks/meta_labeling_pipeline.ipynb`` : adım adım hücreler + grafik
 * ``notebooks/meta_labeling_tek_hucre.py``   : tek hücreye yapıştırılabilir sürüm
+* ``notebooks/research_framework.ipynb``     : 01_config ... 24_final_report araştırma akışı
+  (``meta_labeling.research`` paketini repo içinden import eder)
 
 Notebook'taki kod, paket modüllerinden birebir kopyalanır (göreli import'lar ve
 modül docstring'leri dışında). Paket değiştiğinde yeniden üretin:
@@ -24,6 +26,7 @@ PKG = ROOT / "meta_labeling"
 OUT_DIR = ROOT / "notebooks"
 NOTEBOOK_PATH = OUT_DIR / "meta_labeling_pipeline.ipynb"
 SCRIPT_PATH = OUT_DIR / "meta_labeling_tek_hucre.py"
+RESEARCH_NOTEBOOK_PATH = OUT_DIR / "research_framework.ipynb"
 
 # Bağımlılık sırasına göre modüller ve bölüm başlıkları
 MODULES: list[tuple[str, str]] = [
@@ -290,11 +293,169 @@ def build_script() -> str:
     return "\n\n\n".join(parts) + "\n"
 
 
+# --------------------------------------------------------------------- araştırma notebook'u
+RESEARCH_INTRO = """\
+# Meta-Labeling Research Framework (profesyonel backtest denetimi)
+
+Bu notebook `meta_labeling.research` paketini **adım adım** çalıştırır. Amaç backtest
+performansını maksimize etmek DEĞİL; sonucun gerçekten güvenilir olup olmadığını test etmektir.
+
+**Kurulum:** Repoyu indirin (GitHub → *Code → Download ZIP* veya `git clone`), bu notebook'u
+`notebooks/` klasöründen açın. Tüm parametreler repo kökündeki `config.yaml` dosyasındadır.
+
+**Araştırma kuralı:** OOS sonuçlarına bakarak eşik, hiperparametre, öznitelik veya bariyer
+değiştirmeyin. Değiştirirseniz bu yeni bir deneydir (experiments/ kaydına düşer).
+
+Hücreleri sırayla çalıştırın (*Run → Run All Cells*). Tam çalışma ~30-60 sn sürer."""
+
+RESEARCH_CELLS: list[tuple[str, str, str]] = [
+    ("01_config", "Konfigürasyon `config.yaml`'dan okunur; kodda kritik parametre yoktur.", """\
+# %pip install -q -r ../requirements.txt   # gerekirse bir kez
+
+import sys
+from pathlib import Path
+from dataclasses import replace
+
+ROOT = next(p for p in [Path.cwd(), *Path.cwd().parents] if (p / "meta_labeling").is_dir())
+sys.path.insert(0, str(ROOT))
+
+from meta_labeling.research import load_research_config
+
+cfg = load_research_config(ROOT / "config.yaml")
+cfg = replace(cfg, experiment=replace(cfg.experiment, output_dir=str(ROOT / cfg.experiment.output_dir)))
+print("config parmak izi:", cfg.fingerprint())
+print("veri:", cfg.data.source, cfg.data.tickers, "| execution:", cfg.execution.mode,
+      "| eşik:", cfg.meta_model.threshold, "| maliyet:", cfg.cost_per_side * 1e4, "bps/yön")"""),
+    ("02_imports", "", """\
+import pandas as pd
+from IPython.display import Image, Markdown, display
+
+from meta_labeling.research import ResearchSession, run_universe
+
+pd.set_option("display.width", 200)
+pd.set_option("display.max_columns", 30)
+pd.set_option("display.float_format", lambda v: f"{v:,.4f}")
+
+session = ResearchSession(cfg)  # varsayılan: config'deki ilk hisse"""),
+    ("03_data_validation", "Kritik sorunlarda (NaN, sırasız tarih, negatif fiyat) çalışma durur.", """\
+session.validate_data()"""),
+    ("04_data_loading", "Veri kaynağı, dönem ve survivorship durumu.", """\
+session.load_data()"""),
+    ("05_feature_engineering", "Yönden bağımsız rejim öznitelikleri (yalnızca t kapanışına kadar veri).", """\
+session.build_features()"""),
+    ("06_leakage_audit", "Öznitelik, volatilite, birincil sinyal, CUSUM, ADV ve rejimler için kesme testi. "
+     "Tam denetim (etiketler, CV, CPCV, kalibrasyon) 24. hücrede tekrar çalışır.", """\
+audit = session.leakage_audit()
+print("LEAKAGE AUDIT:", audit.status)
+audit.findings"""),
+    ("07_event_sampling", "CUSUM olayları + birincil yön.", """\
+session.sample_events()"""),
+    ("08_triple_barrier", "Execution fiyatlı Triple Barrier (sinyal close(t), işlem open(t+1)).", """\
+session.triple_barrier()
+session.results["barrier"]"""),
+    ("09_primary_model", "", """\
+session.primary_model()"""),
+    ("10_meta_labels", "", """\
+session.meta_labels()"""),
+    ("11_cv", "Purged K-Fold (teşhis).", """\
+session.cross_validation()"""),
+    ("12_walk_forward", "Purged walk-forward OOS + ağırlıklandırma karşılaştırması (A: none, B: uniqueness).", """\
+display(session.walk_forward())
+session.results["oos"]"""),
+    ("13_probability_calibration", "Kalibratörler yalnızca geçmiş, kapanmış OOS etiketleriyle fit edilir.", """\
+session.calibration()"""),
+    ("14_benchmark_strategies", "A-I benchmark'lar: aynı pencere, maliyet, sermaye ve execution.", """\
+print(session.results.get("benchmark_note", ""))
+session.benchmarks()"""),
+    ("15_transaction_costs", "", """\
+costs = session.transaction_costs()
+print("Meta breakeven maliyet (bps/yön):", round(session.results["breakeven_cost_bps"], 1))
+display(costs.pivot(index="cost_bps", columns="strategy", values="Sharpe"))
+print(session.results["cost_model"]["formula"])
+session.results["cost_model"]["table"]"""),
+    ("16_position_sizing", "", """\
+display(session.position_sizing())
+print(session.results["sizing_note"])"""),
+    ("17_backtest", "Eşik ızgarası (yalnızca raporlama), long/short, drawdown ve işlem dağılımı.", """\
+display(session.backtest())
+display(session.results["long_short"])
+display(session.results["drawdowns"])
+display(session.results["worst_drawdowns"]["Meta"])
+session.results["trade_distribution"]"""),
+    ("18_regime_analysis", "Rejimler geleceğe bakmayan genişleyen kantillerle sınıflandırılır.", """\
+for name, table in session.regime_analysis().items():
+    display(Markdown(f"**{name}**"), table)
+session.results["periods"]"""),
+    ("19_feature_importance", "Bu sonuçlara göre öznitelik seçimi YAPMAYIN.", """\
+display(session.feature_importance())
+display(session.results["ablation"])
+session.results["feature_corr"].round(2)"""),
+    ("20_statistical_tests", "", """\
+display(session.statistical_tests())
+print(session.results["bootstrap_note"])"""),
+    ("21_CPCV", "", """\
+cp = session.cpcv()
+display(session.results["cpcv_info"])
+cp.groupby("strategy")[["Sharpe", "CAGR", "Max Drawdown"]].describe().round(3)"""),
+    ("22_randomization_tests", "", """\
+session.randomization_tests()"""),
+    ("23_visualizations", "", """\
+for path in session.visualizations().values():
+    display(Image(filename=str(path)))"""),
+    ("24_final_report", "Tam leakage denetimi + otomatik rapor + deney kaydı.", """\
+session.leakage_audit(full=True)
+report = session.final_report()
+display(Markdown(f"## Karar: {report.verdict}"))
+display(report.final_table)
+display(report.robustness_table)
+for title, items in report.evidence.items():
+    display(Markdown(f"### {title}\\n" + "\\n".join(f"- {x}" for x in items)))
+print("Rapor:", report.path)
+print("Deney kaydı:", report.experiment_path)"""),
+]
+
+RESEARCH_EXTRA = [
+    ("markdown", """\
+### (Opsiyonel) Çoklu hisse testi
+
+Her hisse için aynı ex-ante config ile çekirdek OOS testi. Sentetik veride her hisse farklı bir
+simülasyon yoludur; gerçek veri için `config.yaml` → `data.source: csv` veya `yfinance`."""),
+    ("code", """\
+from meta_labeling.research import DEFAULT_BIST_TICKERS
+
+universe_cfg = replace(cfg, data=replace(cfg.data, tickers=DEFAULT_BIST_TICKERS))
+run_universe(universe_cfg)"""),
+    ("markdown", "### Tam raporu notebook içinde görüntüle"),
+    ("code", """\
+display(Markdown(report.path.read_text(encoding="utf-8")))"""),
+]
+
+
+def build_research_notebook() -> str:
+    cells = [_cell("markdown", RESEARCH_INTRO)]
+    for name, note, code in RESEARCH_CELLS:
+        cells.append(_cell("markdown", f"## {name}" + (f"\n\n{note}" if note else "")))
+        cells.append(_cell("code", code))
+    cells += [_cell(kind, src) for kind, src in RESEARCH_EXTRA]
+    notebook = {
+        "cells": cells,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 4,
+    }
+    return json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
+
+
 def main() -> None:
     OUT_DIR.mkdir(exist_ok=True)
     NOTEBOOK_PATH.write_text(build_notebook(), encoding="utf-8")
     SCRIPT_PATH.write_text(build_script(), encoding="utf-8")
-    print(f"Yazıldı: {NOTEBOOK_PATH.relative_to(ROOT)}, {SCRIPT_PATH.relative_to(ROOT)}")
+    RESEARCH_NOTEBOOK_PATH.write_text(build_research_notebook(), encoding="utf-8")
+    print(f"Yazıldı: {NOTEBOOK_PATH.relative_to(ROOT)}, {SCRIPT_PATH.relative_to(ROOT)}, "
+          f"{RESEARCH_NOTEBOOK_PATH.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
